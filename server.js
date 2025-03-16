@@ -7,67 +7,63 @@ import fs from 'fs';
 import dotenv from 'dotenv';
 import pinataSDK from '@pinata/sdk';
 import authRoutes from './server/auth.js';
-app.use('/auth', authRoutes);
 
-// Initialize environment variables
+// ✅ Load environment variables
 dotenv.config();
 
-// Validate environment variables
+// ✅ Validate Environment Variables
 const requiredEnvVars = ['PINATA_API_KEY', 'PINATA_SECRET_API_KEY'];
 const missingEnvVars = requiredEnvVars.filter(envVar => !process.env[envVar]);
 
 if (missingEnvVars.length > 0) {
-  console.error('Missing required environment variables:', missingEnvVars.join(', '));
+  console.error('❌ Missing required environment variables:', missingEnvVars.join(', '));
   process.exit(1);
 }
 
-// Setup Express
+// ✅ Setup Express
 const app = express();
 app.use(cors());
+app.use(express.json());
 
-// Setup file upload directory
+// ✅ Initialize Pinata SDK
+const pinata = new pinataSDK(process.env.PINATA_API_KEY, process.env.PINATA_SECRET_API_KEY);
+
+// ✅ Check Pinata Authentication
+async function checkPinataAuth() {
+  try {
+    const response = await pinata.testAuthentication();
+    console.log('✅ Successfully connected to Pinata');
+  } catch (error) {
+    console.error('❌ Pinata authentication failed:', error.message);
+    process.exit(1);
+  }
+}
+checkPinataAuth(); // Call this function to check authentication
+
+// ✅ Setup file upload directory
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const uploadDir = join(__dirname, 'uploads');
 
-// Create uploads directory if it doesn't exist
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir);
 }
 
-// Configure multer for file uploads
+// ✅ Configure multer for file uploads
 const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, uploadDir);
-  },
-  filename: function (req, file, cb) {
-    cb(null, Date.now() + '-' + file.originalname);
-  }
+  destination: (req, file, cb) => cb(null, uploadDir),
+  filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`)
 });
 
 const upload = multer({ 
-  storage: storage,
-  limits: {
-    fileSize: 10 * 1024 * 1024 // 10MB limit
-  }
+  storage,
+  limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
 });
 
-// Initialize Pinata
-const pinata = new pinataSDK(
-  process.env.PINATA_API_KEY,
-  process.env.PINATA_SECRET_API_KEY
-);
+// ✅ Routes
+app.use('/auth', authRoutes); // Authentication Routes
 
-// Verify Pinata credentials
-try {
-  await pinata.testAuthentication();
-  console.log('Successfully connected to Pinata');
-} catch (error) {
-  console.error('Pinata authentication failed:', error.message);
-  process.exit(1);
-}
-
-// Health check endpoint
+// ✅ Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'healthy',
@@ -75,32 +71,26 @@ app.get('/health', (req, res) => {
   });
 });
 
+// ✅ Get all uploaded files
 app.get('/files', async (req, res) => {
   try {
-    const files = await fs.readdir(uploadDir);
+    const files = await fs.promises.readdir(uploadDir);
     res.json({ success: true, files });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Error fetching files', error: error.message });
   }
 });
 
-app.use((err, req, res, next) => {
-  console.error('❌ Error:', err.message);
-  res.status(500).json({ success: false, message: 'Internal Server Error' });
-});
-
-// File upload endpoint
+// ✅ File Upload Endpoint
 app.post('/upload', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'No file provided' 
-      });
+      return res.status(400).json({ success: false, message: 'No file provided' });
     }
 
+    console.log("📤 Uploading file to Pinata:", req.file.originalname);
+
     const readableStreamForFile = fs.createReadStream(req.file.path);
-    
     const result = await pinata.pinFileToIPFS(readableStreamForFile, {
       pinataMetadata: {
         name: req.file.originalname,
@@ -111,9 +101,11 @@ app.post('/upload', upload.single('file'), async (req, res) => {
       }
     });
 
-    // Clean up: remove the temporary file
+    console.log("✅ File uploaded successfully! CID:", result.IpfsHash);
+
+    // Delete the uploaded file after storing on Pinata
     fs.unlink(req.file.path, (err) => {
-      if (err) console.error('Error removing temporary file:', err);
+      if (err) console.error('⚠️ Error removing temporary file:', err);
     });
 
     return res.json({
@@ -123,14 +115,8 @@ app.post('/upload', upload.single('file'), async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Upload error:', error);
-
-    // Clean up on error
-    if (req.file) {
-      fs.unlink(req.file.path, (err) => {
-        if (err) console.error('Error removing temporary file:', err);
-      });
-    }
+    console.error('❌ Upload error:', error);
+    if (req.file) fs.unlink(req.file.path, (err) => console.error(err));
 
     return res.status(500).json({
       success: false,
@@ -140,19 +126,15 @@ app.post('/upload', upload.single('file'), async (req, res) => {
   }
 });
 
-// Error handling middleware
+// ✅ Error Handling Middleware
 app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({
-    success: false,
-    message: 'Internal server error',
-    error: err.message
-  });
+  console.error('❌ Error:', err.message);
+  res.status(500).json({ success: false, message: 'Internal Server Error' });
 });
 
-// Start server
+// ✅ Start Server
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`Health check available at http://localhost:${PORT}/health`);
+  console.log(`🚀 Server running on http://localhost:${PORT}`);
+  console.log(`🩺 Health check available at http://localhost:${PORT}/health`);
 });
