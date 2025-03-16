@@ -6,6 +6,8 @@ import { dirname, join } from 'path';
 import fs from 'fs';
 import dotenv from 'dotenv';
 import pinataSDK from '@pinata/sdk';
+import authRoutes from './server/auth.js';
+app.use('/auth', authRoutes);
 
 // Initialize environment variables
 dotenv.config();
@@ -71,6 +73,20 @@ app.get('/health', (req, res) => {
     status: 'healthy',
     pinataConnected: true
   });
+});
+
+app.get('/files', async (req, res) => {
+  try {
+    const files = await fs.readdir(uploadDir);
+    res.json({ success: true, files });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Error fetching files', error: error.message });
+  }
+});
+
+app.use((err, req, res, next) => {
+  console.error('❌ Error:', err.message);
+  res.status(500).json({ success: false, message: 'Internal Server Error' });
 });
 
 // File upload endpoint
